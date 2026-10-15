@@ -488,16 +488,18 @@ final class Recorder: NSObject, @unchecked Sendable {
         guard writer.status == .writing else {
             logger.info("recorder: Failed to finish writing \(writer.error?.localizedDescription ?? "")")
             reset()
+            finish()
             return
         }
         // mediaplaybackd iOS process leaks threads and uses a lot of CPU when calling
         // finishWriting when audio and video has not been appended.
         if hasAudioAndVideoBeenAppended() {
             writer.finishWriting {
-                self.delegate?.recorderFinished()
+                self.finish()
             }
         } else {
             writer.cancelWriting()
+            finish()
         }
         reset()
     }
@@ -514,9 +516,13 @@ final class Recorder: NSObject, @unchecked Sendable {
         audioOutputFormat = nil
         basePresentationTimeStamp = .invalid
         nextAudioPresentationTimeStamp = .invalid
+    }
+
+    private func finish() {
         fileWriterQueue.async {
             self.fileHandle = nil
             self.initSegment = nil
+            self.delegate?.recorderFinished()
         }
     }
 
