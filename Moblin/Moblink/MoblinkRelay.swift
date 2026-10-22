@@ -228,10 +228,15 @@ private class Relay: NSObject {
             reconnect(reason: "Failed to parse host and port")
             return
         }
-        destinationConnection = NWConnection(host: host, port: port, using: params)
-        destinationConnection?.stateUpdateHandler = handleDestinationStateUpdate(to:)
-        destinationConnection?.start(queue: moblinkRelayQueue)
-        receiveDestinationPacket()
+        let connection = NWConnection(host: host, port: port, using: params)
+        connection.stateUpdateHandler = handleDestinationStateUpdate(to:)
+        moblinkRelayQueue.sync {
+            destinationConnection = connection
+        }
+        connection.start(queue: moblinkRelayQueue)
+        moblinkRelayQueue.async {
+            self.receiveDestinationPacket()
+        }
         setState(state: .waitingForCellular)
         startTunnelId = id
     }
@@ -254,12 +259,14 @@ private class Relay: NSObject {
         streamerListener?.stateUpdateHandler = nil
         streamerListener?.cancel()
         streamerListener = nil
-        streamerConnection?.stateUpdateHandler = nil
-        streamerConnection?.cancel()
-        streamerConnection = nil
-        destinationConnection?.stateUpdateHandler = nil
-        destinationConnection?.cancel()
-        destinationConnection = nil
+        moblinkRelayQueue.sync {
+            streamerConnection?.stateUpdateHandler = nil
+            streamerConnection?.cancel()
+            streamerConnection = nil
+            destinationConnection?.stateUpdateHandler = nil
+            destinationConnection?.cancel()
+            destinationConnection = nil
+        }
         startTunnelId = nil
     }
 

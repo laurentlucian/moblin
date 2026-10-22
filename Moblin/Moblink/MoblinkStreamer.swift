@@ -95,6 +95,7 @@ private class Relay {
             }
             self.batteryPercentage = batteryPercentage
             self.thermalState = thermalState
+            self.streamer?.onChange?()
         } onError: { error in
             logger.info("moblink-streamer: \(self.name): Status failed with \(error)")
         }
@@ -179,6 +180,7 @@ private class Relay {
             send(message: .identified(result: .ok))
             startTunnelInternal()
             updateStatus()
+            streamer?.onChange?()
         } else {
             send(message: .identified(result: .wrongPassword))
             throw "Relay sent wrong password"
@@ -240,6 +242,7 @@ class MoblinkStreamer: NSObject {
     private let name: String
     private var server: NWListener?
     var connectionErrorMessage = ""
+    var onChange: (() -> Void)?
     private var retryStartTimer = MainTimer()
     fileprivate weak var delegate: (any MoblinkStreamerDelegate)?
     private var relays: [Relay] = []
@@ -304,6 +307,12 @@ class MoblinkStreamer: NSObject {
             .map { ($0.name, $0.batteryPercentage, $0.thermalState) }
     }
 
+    func getRelayStatuses() -> [(UUID, String, Int?, MoblinkThermalState?)] {
+        relays
+            .filter { !$0.name.isEmpty }
+            .map { ($0.relayId, $0.name, $0.batteryPercentage, $0.thermalState) }
+    }
+
     func updateStatus() {
         for relay in relays {
             relay.updateStatus()
@@ -316,24 +325,51 @@ class MoblinkStreamer: NSObject {
             let options = NWProtocolWebSocket.Options()
             options.autoReplyPing = true
             parameters.defaultProtocolStack.applicationProtocols.append(options)
-            server = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port)!)
-            server?.service = NWListener.Service(
+            let server = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port)!)
+            self.server = server
+            server.service = NWListener.Service(
                 name: idStorage.get(),
                 type: moblinkBonjourType,
                 domain: moblinkBonjourDomain,
                 txtRecord: NWTXTRecord(["name": name])
             )
-            server?.newConnectionHandler = { connection in
+            server.newConnectionHandler = { connection in
                 MainActor.assumeIsolated {
                     self.handleNewConnection(connection: connection)
                 }
             }
-            server?.start(queue: .main)
+            server.stateUpdateHandler = { [weak self, weak server] state in
+                MainActor.assumeIsolated {
+                    guard let self, let server, server === self.server else {
+                        return
+                    }
+                    self.handleServerState(state)
+                }
+            }
+            server.start(queue: .main)
             stopRetryStartTimer()
         } catch {
             logger.debug("moblink-streamer: Failed to start server with error \(error)")
             connectionErrorMessage = error.localizedDescription
             startRetryStartTimer()
+            onChange?()
+        }
+    }
+
+    private func handleServerState(_ state: NWListener.State) {
+        switch state {
+        case .ready:
+            connectionErrorMessage = ""
+            onChange?()
+        case let .failed(error):
+            logger.info("moblink-streamer: Server failed with error \(error)")
+            connectionErrorMessage = error.localizedDescription
+            server?.cancel()
+            server = nil
+            startRetryStartTimer()
+            onChange?()
+        default:
+            break
         }
     }
 
@@ -380,6 +416,7 @@ class MoblinkStreamer: NSObject {
             relay.stop()
         }
         relays.removeAll(where: { $0.webSocket === webSocket })
+        onChange?()
     }
 
     private func receivePacket(webSocket: NWConnection) {
