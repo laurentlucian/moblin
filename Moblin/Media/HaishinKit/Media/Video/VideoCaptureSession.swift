@@ -493,11 +493,6 @@ final class VideoCaptureSession: NSObject, @unchecked Sendable {
         }
         let message = error._nsError.localizedFailureReason ?? "\(error.code)"
         processor?.delegate.streamVideoCaptureSessionError(message)
-        processorControlQueue.asyncAfter(deadline: .now() + .milliseconds(500)) {
-            if self.isRunning {
-                self.session.startRunning()
-            }
-        }
     }
 
     private func updateDevicesFormat() {
